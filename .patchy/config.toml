@@ -63,14 +63,42 @@ pull-requests = [
   "12494",
   # change case of text
   "12043",
-  # statusline.merge-with-commandline
-  "12204",
+  # toggle statusline.merge-with-commandline
+  # "12204",
   # display long status message as poups
   # "12241",
   # picker titles
   "12520",
   # extra variable expansions
   "13068",
+  # git blame
+  "13133",
+  # powerful-file-explorer
+  "12902",
+  # feat: Double click selects word, Triple click selects line
+  "12514",
+  # feat: new command to goto hover (like goto definition)
+  # space + k
+  "12208",
+  # toggle enable-diagnostics
+  "12203",
+  # Use separate glyphs for hint/info/warning/error diagnostic indicators
+  "13736",
+  # feat(auto-pair): auto-pair triple quotes properly
+  "13699",
+  # add more quote types to markdown autopairs
+  "13693",
+  # feat: Statusline elements style support #13666
+  # [WIP] View based refactoring in workspace #4381 conficts
+  # :buffer-nth command #13650
+  # Update diff gutter on document save #13590
+  "13590",
+  # Support features of :open in :vsplit & :hsplit #13461
+  "13461",
+  # Fix: .editorconfig is now reloaded on :config-reload #13443
+  "13443",
+  # Stack picker and preview vertically if too narrow #13430
+  "13430",
 ]
 
 # Optional: A list of patches to apply
