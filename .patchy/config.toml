@@ -71,10 +71,10 @@ pull-requests = [
   "12520",
   # extra variable expansions
   "13068",
-  # git blame
-  "13133",
-  # powerful-file-explorer
-  "12902",
+  # git blame failed to merge
+  # "13133",
+  # powerful-file-explorer fail to merge
+  # "12902",
   # feat: Double click selects word, Triple click selects line
   "12514",
   # feat: new command to goto hover (like goto definition)
@@ -97,8 +97,8 @@ pull-requests = [
   "13461",
   # Fix: .editorconfig is now reloaded on :config-reload #13443
   "13443",
-  # Stack picker and preview vertically if too narrow #13430
-  "13430",
+  # Stack picker and preview vertically if too narrow #13430 failed to merge
+  #"13430",
 ]
 
 # Optional: A list of patches to apply
