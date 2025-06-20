@@ -6,7 +6,7 @@
 # repo = "helix-editor/helix"
 # repo = "microsoft/vscode"
 
-repo = ""
+repo = "helix-editor/helix"
 
 # The main repository's branch
 # 
@@ -23,7 +23,7 @@ repo = ""
 #
 # remote-branch = "master @ fccc58957eece10d0818dfa000bf5123e26ee32f"
 
-remote-branch = "main"
+remote-branch = "master"
 
 # Branch which patchy will use to do all of its work on
 #
@@ -52,7 +52,26 @@ local-branch = "patchy"
 #   "8145 @ 840cb7e9982699ff107d0577691b5db9806b3b66"
 # ]
 
-pull-requests = []
+pull-requests = [
+  # highlight rust string interpolation macros
+  # "12768",
+  # tree-house
+  "12972",
+  # full screen overlays
+  "12311",
+  # select around quote
+  "12494",
+  # change case of text
+  "12043",
+  # statusline.merge-with-commandline
+  "12204",
+  # display long status message as poups
+  "12241",
+  # picker titles
+  "12520",
+  # extra variable expansions
+  "13068",
+]
 
 # Optional: A list of patches to apply
 #
