@@ -99,6 +99,9 @@ pull-requests = [
   "13443",
   # Stack picker and preview vertically if too narrow #13430 failed to merge
   #"13430",
+  # added custom opacity setting for forcing themes to use opaque backgrounds
+  # setting the [editor] bg-transparent option to "transparent"
+  "8905",
 ]
 
 # Optional: A list of patches to apply
