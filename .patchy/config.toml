@@ -101,7 +101,8 @@ pull-requests = [
   #"13430",
   # added custom opacity setting for forcing themes to use opaque backgrounds
   # setting the [editor] bg-transparent option to "transparent"
-  "8905",
+  # merge conflict
+  # "8905",
 ]
 
 # Optional: A list of patches to apply
