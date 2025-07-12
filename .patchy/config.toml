@@ -95,14 +95,21 @@ pull-requests = [
   "13590",
   # Support features of :open in :vsplit & :hsplit #13461
   "13461",
-  # Fix: .editorconfig is now reloaded on :config-reload #13443
-  "13443",
+  # Fix: .editorconfig is now reloaded on :config-reload #13443 merged
+  # "13443",
   # Stack picker and preview vertically if too narrow #13430 failed to merge
-  #"13430",
+  "13430",
   # added custom opacity setting for forcing themes to use opaque backgrounds
   # setting the [editor] bg-transparent option to "transparent"
   # merge conflict
   # "8905",
+  # Add tree-sitter injections for jj config files #13926
+  "13926",
+  # fix: indentation with spaces aligned on columns #13824
+  "13824",
+  # fix: use real terminal cursor for block mode #13821 (might fix ghostty cursor shader)
+  # feat(lsp): sort diagnostic picker by severity #13806
+  "13806",
 ]
 
 # Optional: A list of patches to apply
