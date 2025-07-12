@@ -98,7 +98,7 @@ pull-requests = [
   # Fix: .editorconfig is now reloaded on :config-reload #13443 merged
   # "13443",
   # Stack picker and preview vertically if too narrow #13430 failed to merge
-  "13430",
+  # "13430",
   # added custom opacity setting for forcing themes to use opaque backgrounds
   # setting the [editor] bg-transparent option to "transparent"
   # merge conflict
