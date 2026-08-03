@@ -3,8 +3,8 @@ use helix_event::{cancelable_future, register_hook};
 use helix_lsp::{lsp, util::lsp_range_to_range, OffsetEncoding};
 use helix_view::{
     events::{
-        ConfigDidChange, DocumentDidChange, DocumentDidOpen, LanguageServerExited,
-        LanguageServerInitialized, SelectionDidChange,
+        ConfigDidChange, DocumentDidChange, DocumentDidOpen, DocumentFocusLost,
+        LanguageServerExited, LanguageServerInitialized, SelectionDidChange,
     },
     handlers::Handlers,
     DocumentId, Editor, ViewId,
@@ -147,6 +147,20 @@ pub(super) fn register_hooks(_handlers: &Handlers) {
             return Ok(());
         }
         request_document_highlights(event.editor, event.doc, view_id);
+        Ok(())
+    });
+
+    register_hook!(move |event: &mut DocumentFocusLost<'_>| {
+        if !event.editor.config().lsp.auto_document_highlight {
+            return Ok(());
+        }
+        // Focus-loss events are dispatched after the editor has selected the
+        // replacement document/view, so refresh highlights for that view.
+        let view_id = event.editor.tree.focus;
+        let Some(view) = event.editor.tree.try_get(view_id) else {
+            return Ok(());
+        };
+        request_document_highlights(event.editor, view.doc, view_id);
         Ok(())
     });
 
