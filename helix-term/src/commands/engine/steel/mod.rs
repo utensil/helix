@@ -513,6 +513,32 @@ fn send_arbitrary_lsp_notification(
     Ok(())
 }
 
+fn send_lsp_notification_for_document(
+    cx: &mut Context,
+    doc_id: DocumentId,
+    name: SteelString,
+    method: SteelString,
+    params: Option<SteelVal>,
+) -> anyhow::Result<()> {
+    let argument = params.map(|x| serde_json::Value::try_from(x).unwrap());
+    let doc = cx
+        .editor
+        .documents
+        .get(&doc_id)
+        .ok_or_else(|| anyhow::anyhow!("Document is no longer open"))?;
+    let language_server_id = anyhow::Context::context(
+        doc.language_servers().find(|x| x.name() == name.as_str()),
+        "Unable to find the language server specified for the document",
+    )?
+    .id();
+    let language_server = cx
+        .editor
+        .language_server_by_id(language_server_id)
+        .ok_or(anyhow::anyhow!("Failed to find a language server by id"))?;
+    language_server.send_custom_notification(method.to_string(), argument)?;
+    Ok(())
+}
+
 pub struct BufferExtensionKeyMap {
     map: HashMap<String, EmbeddedKeyMap>,
     reverse: HashMap<usize, String>,
@@ -4203,6 +4229,11 @@ fn load_misc_api(engine: &mut Engine, generate_sources: bool) {
             CTX,
             "send-lsp-notification",
             send_arbitrary_lsp_notification,
+        )
+        .register_fn_with_ctx(
+            CTX,
+            "send-lsp-notification-for-document",
+            send_lsp_notification_for_document,
         )
         .register_fn_with_ctx(CTX, "lsp-reply-ok", lsp_reply_ok)
         .register_fn("acquire-context-lock", acquire_context_lock)

@@ -186,6 +186,13 @@
 ;; ```
 (define send-lsp-notification helix.send-lsp-notification)
 
+(provide send-lsp-notification-for-document)
+;; Send an LSP notification through the client attached to a specific open
+;; document. This is used by lifecycle hooks when the focused document has
+;; already changed but its previous client still owns state to release.
+(define send-lsp-notification-for-document
+  helix.send-lsp-notification-for-document)
+
 (provide lsp-reply-ok)
 ;;@doc
 ;; Send a successful reply to an LSP request with the given result.
