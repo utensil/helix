@@ -103,6 +103,11 @@
 (define (register-hook event-kind callback-fn)
   (helix.register-hook event-kind callback-fn))
 
+(provide doc-id->usize)
+;; Convert a document identity received by a lifecycle hook to a stable
+;; comparable integer for extension-owned per-document state.
+(define doc-id->usize helix.doc-id->usize)
+
 ;;@doc
 ;; Get the ID of the closed document
 (provide doc-closed-id)
