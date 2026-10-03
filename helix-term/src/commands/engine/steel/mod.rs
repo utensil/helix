@@ -43,6 +43,7 @@ use helix_view::{
 };
 use once_cell::sync::{Lazy, OnceCell};
 use serde_json::Value;
+use serde::Deserialize;
 use steel::{
     compiler::modules::steel_home,
     gc::{unsafe_erased_pointers::CustomReference, ShareableMut},
@@ -1435,6 +1436,140 @@ fn current_buffer_area(cx: &mut Context) -> Option<helix_view::graphics::Rect> {
     cx.editor.tree.view_id_area(focus)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictWorkspaceEdit {
+    documents: Vec<StrictDocumentEdit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictDocumentEdit {
+    uri: String,
+    version: i32,
+    edits: Vec<StrictTextEdit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictTextEdit {
+    range: StrictRange,
+    new_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictRange {
+    start: helix_lsp::Position,
+    end: helix_lsp::Position,
+}
+
+fn strict_lsp_position(
+    doc: &helix_view::Document,
+    position: helix_lsp::Position,
+) -> anyhow::Result<usize> {
+    let text = doc.text();
+    let end_of_document = position.line as usize == text.len_lines() && position.character == 0;
+    if end_of_document {
+        return Ok(text.len_chars());
+    }
+    let offset = helix_lsp::util::lsp_pos_to_pos(
+        text,
+        position,
+        helix_lsp::OffsetEncoding::Utf16,
+    )
+    .ok_or_else(|| anyhow::anyhow!("invalid UTF-16 position"))?;
+    let canonical = helix_lsp::util::pos_to_lsp_pos(
+        text,
+        offset,
+        helix_lsp::OffsetEncoding::Utf16,
+    );
+    if canonical != position {
+        return Err(anyhow::anyhow!("position is outside the document"));
+    }
+    Ok(offset)
+}
+
+fn apply_transactional_workspace_edit(
+    cx: &mut Context,
+    payload: SteelString,
+) -> anyhow::Result<SteelString> {
+    let edit: StrictWorkspaceEdit = serde_json::from_str(payload.as_str())?;
+    if edit.documents.is_empty() {
+        return Err(anyhow::anyhow!("workspace edit has no documents"));
+    }
+
+    struct Prepared {
+        id: DocumentId,
+        view: ViewId,
+        changes: Vec<helix_core::Change>,
+    }
+
+    let mut prepared = Vec::with_capacity(edit.documents.len());
+    let mut seen = HashSet::new();
+    for document in edit.documents {
+        let url: helix_lsp::Url = document.uri.parse()?;
+        let uri = helix_core::Uri::try_from(url)?;
+        let path = uri
+            .as_path()
+            .ok_or_else(|| anyhow::anyhow!("workspace edit URI is not a file"))?;
+        let id = cx
+            .editor
+            .document_id_by_path(path)
+            .ok_or_else(|| anyhow::anyhow!("workspace edit document is not open: {path:?}"))?;
+        if !seen.insert(id) {
+            return Err(anyhow::anyhow!("workspace edit repeats a document"));
+        }
+        let view = cx.editor.get_synced_view_id(id);
+        let doc = cx
+            .editor
+            .documents
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("workspace edit document disappeared"))?;
+        if doc.version() != document.version {
+            return Err(anyhow::anyhow!(
+                "workspace edit version mismatch for {path:?}: expected {}, got {}",
+                document.version,
+                doc.version()
+            ));
+        }
+        let mut changes = Vec::with_capacity(document.edits.len());
+        let mut last_end = 0;
+        for text_edit in document.edits {
+            let start = strict_lsp_position(doc, text_edit.range.start)?;
+            let end = strict_lsp_position(doc, text_edit.range.end)?;
+            if start > end || start < last_end {
+                return Err(anyhow::anyhow!("workspace edit ranges overlap or reverse"));
+            }
+            last_end = end;
+            changes.push((
+                start,
+                end,
+                (!text_edit.new_text.is_empty()).then_some(text_edit.new_text.into()),
+            ));
+        }
+        prepared.push(Prepared { id, view, changes });
+    }
+
+    for prepared in prepared {
+        let doc = doc_mut!(cx.editor, &prepared.id);
+        let transaction = Transaction::change(doc.text(), prepared.changes.into_iter());
+        if !doc.apply(&transaction, prepared.view) {
+            return Err(anyhow::anyhow!("workspace edit could not be applied"));
+        }
+        let view = view_mut!(cx.editor, prepared.view);
+        doc.append_changes_to_history(view);
+    }
+
+    Ok(serde_json::json!({
+        "applied": true,
+        "documents": seen.len(),
+        "undoBoundary": "document"
+    })
+    .to_string()
+    .into())
+}
+
 fn load_editor_api(engine: &mut Engine, generate_sources: bool) {
     let mut module = BuiltInModule::new("helix/core/editor");
 
@@ -1579,6 +1714,14 @@ fn load_editor_api(engine: &mut Engine, generate_sources: bool) {
         )
         .register_fn_with_ctx(CTX, "editor->text", document_id_to_text)
         .register_fn_with_ctx(CTX, "editor-document->path", document_path)
+        .register_fn_with_ctx(CTX, "editor-document-version", |cx: &mut Context, doc: DocumentId| {
+            cx.editor.documents.get(&doc).map(|document| document.version())
+        })
+        .register_fn_with_ctx(
+            CTX,
+            "editor-apply-transactional-workspace-edit!",
+            apply_transactional_workspace_edit,
+        )
         .register_fn_with_ctx(CTX, "register->value", cx_register_value)
         .register_fn_with_ctx(
             CTX,
