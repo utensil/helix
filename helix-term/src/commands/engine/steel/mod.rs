@@ -1596,6 +1596,7 @@ fn load_editor_api(engine: &mut Engine, generate_sources: bool) {
     let builtin_editor_command_module = include_str!("editor.scm").to_string();
 
     module.register_fn("register-hook", register_hook);
+    module.register_fn("doc-id->usize", document_id_to_usize);
 
     module
         .register_fn("Action/Load", || Action::Load)
