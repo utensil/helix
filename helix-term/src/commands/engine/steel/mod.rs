@@ -5651,9 +5651,12 @@ fn create_callback<T: TryInto<SteelVal, Error = SteelErr> + 'static>(
     rooted: steel::RootedSteelVal,
 ) -> Result<(), anyhow::Error> {
     let callback = async move {
-        // Result of the future - this will be whatever we get back
-        // from the lsp call
-        let res = future.await?;
+        // Keep arbitrary Steel LSP calls on the callback path even when the
+        // server is restarting or a document was closed. Propagating the
+        // transport error turns a stale, expected response into the generic
+        // user-facing "Sync job failed" status. The extension can discard the
+        // sentinel just like any other stale/malformed response.
+        let res = future.await;
 
         let call: Box<LocalJobCallback> = Box::new(
             move |editor: &mut Editor, _compositor: &mut Compositor, jobs: &mut job::Jobs| {
@@ -5665,28 +5668,46 @@ fn create_callback<T: TryInto<SteelVal, Error = SteelErr> + 'static>(
 
                 let mut ctx = with_context_guard(&mut compositor_context);
 
-                let cloned_func = rooted.value();
+                let callback_fn = rooted.value();
 
-                enter_engine(move |guard| match TryInto::<SteelVal>::try_into(res) {
-                    Ok(result) => {
+                enter_engine(move |guard| match res {
+                    Ok(value) => match TryInto::<SteelVal>::try_into(value) {
+                        Ok(result) => {
+                            let res = guard
+                                .with_mut_reference::<Context, Context>(&mut ctx)
+                                .consume(move |engine, args| {
+                                    let context = args[0].clone();
+                                    engine.update_value(CTX, context);
+
+                                    engine.call_function_with_args(
+                                        callback_fn.clone(),
+                                        vec![result.clone()],
+                                    )
+                                });
+
+                            if let Err(e) = res {
+                                present_error_inside_engine_context(&mut ctx, guard, e);
+                            };
+                        }
+                        Err(e) => present_error_inside_engine_context(&mut ctx, guard, e.into()),
+                    },
+                    Err(error) => {
+                        let result = SteelVal::StringV(
+                            format!("lean4.hx lsp request failed: {error}").into(),
+                        );
                         let res = guard
                             .with_mut_reference::<Context, Context>(&mut ctx)
                             .consume(move |engine, args| {
                                 let context = args[0].clone();
                                 engine.update_value(CTX, context);
-
                                 engine.call_function_with_args(
-                                    cloned_func.clone(),
+                                    callback_fn.clone(),
                                     vec![result.clone()],
                                 )
                             });
-
                         if let Err(e) = res {
                             present_error_inside_engine_context(&mut ctx, guard, e);
                         };
-                    }
-                    Err(e) => {
-                        present_error_inside_engine_context(&mut ctx, guard, e);
                     }
                 })
             },
