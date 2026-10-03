@@ -1526,19 +1526,21 @@ fn apply_transactional_workspace_edit(
             ));
         }
         let mut changes = Vec::with_capacity(document.edits.len());
-        let mut last_end = 0;
         for text_edit in document.edits {
             let start = strict_lsp_position(doc, text_edit.range.start)?;
             let end = strict_lsp_position(doc, text_edit.range.end)?;
-            if start > end || start < last_end {
+            if start > end {
                 return Err(anyhow::anyhow!("workspace edit ranges overlap or reverse"));
             }
-            last_end = end;
             changes.push((
                 start,
                 end,
                 (!text_edit.new_text.is_empty()).then_some(text_edit.new_text.into()),
             ));
+        }
+        changes.sort_by_key(|(start, end, _)| (*start, *end));
+        if changes.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            return Err(anyhow::anyhow!("workspace edit ranges overlap"));
         }
         prepared.push(Prepared { id, view, changes });
     }

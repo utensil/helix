@@ -145,7 +145,6 @@ impl Editor {
                 }
             }
             let mut changes = Vec::with_capacity(text_edits.len());
-            let mut last_end = 0;
             for edit in text_edits {
                 let start = Self::strict_lsp_position(doc, edit.range.start, offset_encoding)
                     .map_err(|kind| ApplyEditError {
@@ -158,7 +157,7 @@ impl Editor {
                         failed_change_idx: index,
                     },
                 )?;
-                if start > end || start < last_end {
+                if start > end {
                     return Err(ApplyEditError {
                         kind: ApplyEditErrorKind::InvalidEdit(
                             "text edits overlap or reverse".into(),
@@ -166,12 +165,18 @@ impl Editor {
                         failed_change_idx: index,
                     });
                 }
-                last_end = end;
                 changes.push((
                     start,
                     end,
                     (!edit.new_text.is_empty()).then_some(edit.new_text.into()),
                 ));
+            }
+            changes.sort_by_key(|(start, end, _)| (*start, *end));
+            if changes.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+                return Err(ApplyEditError {
+                    kind: ApplyEditErrorKind::InvalidEdit("text edits overlap".into()),
+                    failed_change_idx: index,
+                });
             }
             prepared.push(Prepared {
                 doc_id,
