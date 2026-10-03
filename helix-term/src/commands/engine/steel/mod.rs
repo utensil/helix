@@ -42,8 +42,8 @@ use helix_view::{
     DocumentId, Editor, Theme, ViewId,
 };
 use once_cell::sync::{Lazy, OnceCell};
-use serde_json::Value;
 use serde::Deserialize;
+use serde_json::Value;
 use steel::{
     compiler::modules::steel_home,
     gc::{unsafe_erased_pointers::CustomReference, ShareableMut},
@@ -1473,17 +1473,9 @@ fn strict_lsp_position(
     if end_of_document {
         return Ok(text.len_chars());
     }
-    let offset = helix_lsp::util::lsp_pos_to_pos(
-        text,
-        position,
-        helix_lsp::OffsetEncoding::Utf16,
-    )
-    .ok_or_else(|| anyhow::anyhow!("invalid UTF-16 position"))?;
-    let canonical = helix_lsp::util::pos_to_lsp_pos(
-        text,
-        offset,
-        helix_lsp::OffsetEncoding::Utf16,
-    );
+    let offset = helix_lsp::util::lsp_pos_to_pos(text, position, helix_lsp::OffsetEncoding::Utf16)
+        .ok_or_else(|| anyhow::anyhow!("invalid UTF-16 position"))?;
+    let canonical = helix_lsp::util::pos_to_lsp_pos(text, offset, helix_lsp::OffsetEncoding::Utf16);
     if canonical != position {
         return Err(anyhow::anyhow!("position is outside the document"));
     }
@@ -1714,9 +1706,16 @@ fn load_editor_api(engine: &mut Engine, generate_sources: bool) {
         )
         .register_fn_with_ctx(CTX, "editor->text", document_id_to_text)
         .register_fn_with_ctx(CTX, "editor-document->path", document_path)
-        .register_fn_with_ctx(CTX, "editor-document-version", |cx: &mut Context, doc: DocumentId| {
-            cx.editor.documents.get(&doc).map(|document| document.version())
-        })
+        .register_fn_with_ctx(
+            CTX,
+            "editor-document-version",
+            |cx: &mut Context, doc: DocumentId| {
+                cx.editor
+                    .documents
+                    .get(&doc)
+                    .map(|document| document.version())
+            },
+        )
         .register_fn_with_ctx(
             CTX,
             "editor-apply-transactional-workspace-edit!",

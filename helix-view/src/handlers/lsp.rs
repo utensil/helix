@@ -6,11 +6,10 @@ use crate::editor::Action;
 use crate::events::{
     DiagnosticsDidChange, DocumentDidChange, DocumentDidClose, LanguageServerInitialized,
 };
-use crate::{DocumentId, Editor, ViewId};
+use crate::{Document, DocumentId, Editor, ViewId};
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::Uri;
 use helix_event::register_hook;
-use helix_lsp::util::generate_transaction_from_edits;
 use helix_lsp::{lsp, LanguageServerId, OffsetEncoding};
 
 use super::Handlers;
@@ -57,8 +56,7 @@ pub enum ApplyEditErrorKind {
     FileNotFound,
     InvalidUrl(helix_core::uri::UrlConversionError),
     IoError(std::io::Error),
-    // TODO: check edits before applying and propagate failure
-    // InvalidEdit,
+    InvalidEdit(String),
 }
 
 impl From<std::io::Error> for ApplyEditErrorKind {
@@ -80,63 +78,122 @@ impl Display for ApplyEditErrorKind {
             ApplyEditErrorKind::FileNotFound => f.write_str("file not found"),
             ApplyEditErrorKind::InvalidUrl(err) => f.write_str(&format!("{err}")),
             ApplyEditErrorKind::IoError(err) => f.write_str(&format!("{err}")),
+            ApplyEditErrorKind::InvalidEdit(err) => f.write_str(err),
         }
     }
 }
 
 impl Editor {
-    fn apply_text_edits(
-        &mut self,
-        url: &helix_lsp::Url,
-        version: Option<i32>,
-        text_edits: Vec<lsp::TextEdit>,
+    fn strict_lsp_position(
+        doc: &Document,
+        position: lsp::Position,
         offset_encoding: OffsetEncoding,
-    ) -> Result<(), ApplyEditErrorKind> {
-        let uri = match Uri::try_from(url) {
-            Ok(uri) => uri,
-            Err(err) => {
-                log::error!("{err}");
-                return Err(err.into());
-            }
-        };
-        let path = uri.as_path().expect("URIs are valid paths");
+    ) -> Result<usize, ApplyEditErrorKind> {
+        let text = doc.text();
+        if position.line as usize == text.len_lines() && position.character == 0 {
+            return Ok(text.len_chars());
+        }
+        let offset = helix_lsp::util::lsp_pos_to_pos(text, position, offset_encoding)
+            .ok_or_else(|| ApplyEditErrorKind::InvalidEdit("invalid text-edit position".into()))?;
+        if helix_lsp::util::pos_to_lsp_pos(text, offset, offset_encoding) != position {
+            return Err(ApplyEditErrorKind::InvalidEdit(
+                "text-edit position is outside the document".into(),
+            ));
+        }
+        Ok(offset)
+    }
 
-        let doc_id = match self.open(path, Action::Load) {
-            Ok(doc_id) => doc_id,
-            Err(err) => {
-                let err = format!(
-                    "failed to open document: {}: {}",
-                    path.to_string_lossy(),
-                    err
-                );
-                log::error!("{}", err);
-                self.set_error(err);
-                return Err(ApplyEditErrorKind::FileNotFound);
-            }
-        };
-
-        let doc = doc_mut!(self, &doc_id);
-        if let Some(version) = version {
-            if version != doc.version() {
-                let err = format!("outdated workspace edit for {path:?}");
-                log::error!("{err}, expected {} but got {version}", doc.version());
-                self.set_error(err);
-                return Err(ApplyEditErrorKind::DocumentChanged);
-            }
+    fn apply_text_edits_transactional(
+        &mut self,
+        groups: Vec<(&helix_lsp::Url, Option<i32>, Vec<lsp::TextEdit>)>,
+        offset_encoding: OffsetEncoding,
+    ) -> Result<(), ApplyEditError> {
+        struct Prepared {
+            doc_id: DocumentId,
+            view_id: ViewId,
+            transaction: helix_core::Transaction,
         }
 
-        // Need to determine a view for apply/append_changes_to_history
-        let view_id = self.get_synced_view_id(doc_id);
-        let doc = doc_mut!(self, &doc_id);
+        let mut prepared = Vec::with_capacity(groups.len());
+        let mut seen = HashSet::new();
+        for (index, (url, version, text_edits)) in groups.into_iter().enumerate() {
+            let uri = Uri::try_from(url).map_err(|kind| ApplyEditError {
+                kind: kind.into(),
+                failed_change_idx: index,
+            })?;
+            let path = uri.as_path().expect("URIs are valid paths");
+            let doc_id = self
+                .open(path, Action::Load)
+                .map_err(|_err| ApplyEditError {
+                    kind: ApplyEditErrorKind::FileNotFound,
+                    failed_change_idx: index,
+                })?;
+            if !seen.insert(doc_id) {
+                return Err(ApplyEditError {
+                    kind: ApplyEditErrorKind::InvalidEdit("document appears more than once".into()),
+                    failed_change_idx: index,
+                });
+            }
+            let view_id = self.get_synced_view_id(doc_id);
+            let doc = self.documents.get(&doc_id).expect("opened document exists");
+            if let Some(expected) = version {
+                if expected != doc.version() {
+                    return Err(ApplyEditError {
+                        kind: ApplyEditErrorKind::DocumentChanged,
+                        failed_change_idx: index,
+                    });
+                }
+            }
+            let mut changes = Vec::with_capacity(text_edits.len());
+            let mut last_end = 0;
+            for edit in text_edits {
+                let start = Self::strict_lsp_position(doc, edit.range.start, offset_encoding)
+                    .map_err(|kind| ApplyEditError {
+                        kind,
+                        failed_change_idx: index,
+                    })?;
+                let end = Self::strict_lsp_position(doc, edit.range.end, offset_encoding).map_err(
+                    |kind| ApplyEditError {
+                        kind,
+                        failed_change_idx: index,
+                    },
+                )?;
+                if start > end || start < last_end {
+                    return Err(ApplyEditError {
+                        kind: ApplyEditErrorKind::InvalidEdit(
+                            "text edits overlap or reverse".into(),
+                        ),
+                        failed_change_idx: index,
+                    });
+                }
+                last_end = end;
+                changes.push((
+                    start,
+                    end,
+                    (!edit.new_text.is_empty()).then_some(edit.new_text.into()),
+                ));
+            }
+            prepared.push(Prepared {
+                doc_id,
+                view_id,
+                transaction: helix_core::Transaction::change(doc.text(), changes.into_iter()),
+            });
+        }
 
-        let transaction = generate_transaction_from_edits(doc.text(), text_edits, offset_encoding);
-        let view = view_mut!(self, view_id);
-        doc.apply(&transaction, view.id);
-        doc.append_changes_to_history(view);
+        for item in prepared {
+            let doc = doc_mut!(self, &item.doc_id);
+            if !doc.apply(&item.transaction, item.view_id) {
+                return Err(ApplyEditError {
+                    kind: ApplyEditErrorKind::InvalidEdit("text edit could not be applied".into()),
+                    failed_change_idx: 0,
+                });
+            }
+            let view = view_mut!(self, item.view_id);
+            doc.append_changes_to_history(view);
+        }
         Ok(())
     }
 
-    // TODO make this transactional (and set failureMode to transactional)
     pub fn apply_workspace_edit(
         &mut self,
         offset_encoding: OffsetEncoding,
@@ -145,29 +202,27 @@ impl Editor {
         if let Some(ref document_changes) = workspace_edit.document_changes {
             match document_changes {
                 lsp::DocumentChanges::Edits(document_edits) => {
-                    for (i, document_edit) in document_edits.iter().enumerate() {
-                        let edits = document_edit
-                            .edits
-                            .iter()
-                            .map(|edit| match edit {
-                                lsp::OneOf::Left(text_edit) => text_edit,
-                                lsp::OneOf::Right(annotated_text_edit) => {
-                                    &annotated_text_edit.text_edit
-                                }
-                            })
-                            .cloned()
-                            .collect();
-                        self.apply_text_edits(
-                            &document_edit.text_document.uri,
-                            document_edit.text_document.version,
-                            edits,
-                            offset_encoding,
-                        )
-                        .map_err(|kind| ApplyEditError {
-                            kind,
-                            failed_change_idx: i,
-                        })?;
-                    }
+                    let groups = document_edits
+                        .iter()
+                        .map(|document_edit| {
+                            (
+                                &document_edit.text_document.uri,
+                                document_edit.text_document.version,
+                                document_edit
+                                    .edits
+                                    .iter()
+                                    .map(|edit| match edit {
+                                        lsp::OneOf::Left(text_edit) => text_edit,
+                                        lsp::OneOf::Right(annotated_text_edit) => {
+                                            &annotated_text_edit.text_edit
+                                        }
+                                    })
+                                    .cloned()
+                                    .collect(),
+                            )
+                        })
+                        .collect();
+                    self.apply_text_edits_transactional(groups, offset_encoding)?;
                 }
                 lsp::DocumentChanges::Operations(operations) => {
                     log::debug!("document changes - operations: {:?}", operations);
@@ -183,29 +238,22 @@ impl Editor {
                             }
 
                             lsp::DocumentChangeOperation::Edit(document_edit) => {
-                                let edits = document_edit
-                                    .edits
-                                    .iter()
-                                    .map(|edit| match edit {
-                                        lsp::OneOf::Left(text_edit) => text_edit,
-                                        lsp::OneOf::Right(annotated_text_edit) => {
-                                            &annotated_text_edit.text_edit
-                                        }
-                                    })
-                                    .cloned()
-                                    .collect();
-                                self.apply_text_edits(
+                                let groups = vec![(
                                     &document_edit.text_document.uri,
                                     document_edit.text_document.version,
-                                    edits,
-                                    offset_encoding,
-                                )
-                                .map_err(|kind| {
-                                    ApplyEditError {
-                                        kind,
-                                        failed_change_idx: i,
-                                    }
-                                })?;
+                                    document_edit
+                                        .edits
+                                        .iter()
+                                        .map(|edit| match edit {
+                                            lsp::OneOf::Left(text_edit) => text_edit,
+                                            lsp::OneOf::Right(annotated_text_edit) => {
+                                                &annotated_text_edit.text_edit
+                                            }
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                )];
+                                self.apply_text_edits_transactional(groups, offset_encoding)?;
                             }
                         }
                     }
@@ -217,14 +265,11 @@ impl Editor {
 
         if let Some(ref changes) = workspace_edit.changes {
             log::debug!("workspace changes: {:?}", changes);
-            for (i, (uri, text_edits)) in changes.iter().enumerate() {
-                let text_edits = text_edits.to_vec();
-                self.apply_text_edits(uri, None, text_edits, offset_encoding)
-                    .map_err(|kind| ApplyEditError {
-                        kind,
-                        failed_change_idx: i,
-                    })?;
-            }
+            let groups = changes
+                .iter()
+                .map(|(uri, text_edits)| (uri, None, text_edits.to_vec()))
+                .collect();
+            self.apply_text_edits_transactional(groups, offset_encoding)?;
         }
 
         Ok(())
